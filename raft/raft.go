@@ -248,16 +248,16 @@ func (rf *Raft) sendRequestVote(server int) {
 	args := RequestVoteArgs{rf.me, term, lastLogIndex, lastLogTerm}
 	reply := RequestVoteReply{}
 	if !rf.peers[server].Call("Raft.RequestVote", &args, &reply) {
-		log.Fatal("Fail to send RequestVote rpc")
+		DPrintf("Candidate %v fail to send RequestVote rpc to server %v\n", rf.me, server)
 	}
-	if reply.Term > term{
+	if reply.Term > term {
 		rf.mu.Lock()
-		rf.peerKind = Follower//todo
+		rf.peerKind = Follower //todo
 		rf.votedFor = -1
 		rf.mu.Unlock()
 	}
 	//todo when '='
-	if reply.VoteGranted && rf.peerKind == Candidate && rf.currentTerm == term{
+	if reply.VoteGranted && rf.peerKind == Candidate && rf.currentTerm == term {
 		rf.mu.Lock()
 		rf.votesGained += 1
 		rf.mu.Unlock()
@@ -266,10 +266,10 @@ func (rf *Raft) sendRequestVote(server int) {
 }
 func (rf *Raft) sendAppendEntries(server int) {
 
-	args := AppendEntriesArgs{}
+	args := AppendEntriesArgs{rf.currentTerm,rf.me,-1,-1,nil,rf.commitIndex}
 	reply := AppendEntriesReply{}
 	if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
-		log.Fatal("Fail to send AppendEntries(heartbeat) rpc")
+		DPrintf("Leader %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.me, server)
 	}
 
 }
@@ -289,6 +289,9 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	if len(args.Entries) == 0{
+
+	}
 	rf.mu.Lock()
 	rf.votedFor = -1
 	rf.lastUpdated = time.Now()
@@ -342,15 +345,15 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) Act() {
+	ElectionTimeout := time.Duration(rand.Int()%ElectionTimeoutBase+ElectionTimeoutBase) * time.Millisecond
+	peersSum := len(rf.peers)
 	for !rf.killed() {
-		ElectionTimeout := time.Duration(rand.Int()%ElectionTimeoutBase+ElectionTimeoutBase) * time.Millisecond
-		peersSum := len(rf.peers)
 		switch rf.peerKind {
 		case Follower:
 			if time.Now().Sub(rf.lastUpdated) > ElectionTimeout {
 				ElectionTimeout = time.Duration(rand.Int()%ElectionTimeoutBase+ElectionTimeoutBase) * time.Millisecond
 				rf.lastUpdated = time.Now()
-				rf.StartElection()
+				go rf.StartElection()
 			}
 			time.Sleep(CheckTimeoutDuration)
 		case Candidate:
@@ -365,7 +368,7 @@ func (rf *Raft) Act() {
 				rf.votedFor = -1
 				rf.mu.Unlock()
 			}
-			time.Sleep(CheckTimeoutDuration)//todo
+			time.Sleep(CheckTimeoutDuration) //todo
 		case Leader:
 			for index := 0; index < len(rf.peers); index++ {
 				if index != rf.me {
@@ -385,6 +388,7 @@ func (rf *Raft) Act() {
 // Become a candidate and start an election
 //
 func (rf *Raft) StartElection() {
+	DPrintf("Candidate %v started election", rf.me)
 	rf.mu.Lock()
 	rf.peerKind = Candidate
 	rf.currentTerm += 1
@@ -392,15 +396,12 @@ func (rf *Raft) StartElection() {
 	rf.votedFor = rf.me
 	rf.mu.Unlock()
 
-
 	for index := 0; index < len(rf.peers); index++ {
 		if index != rf.me {
 			// use goroutine to send RPCs separately
 			go rf.sendRequestVote(index)
 		}
 	}
-
-
 }
 
 //
