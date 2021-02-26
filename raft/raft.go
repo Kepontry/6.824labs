@@ -156,6 +156,20 @@ type RequestVoteReply struct {
 }
 
 //
+// Let a leader or candidate downgrade to a follower.
+// Fresh its state if it's already a follower
+//
+func (rf *Raft) TurnFollower() {
+	rf.mu.Lock()
+
+	rf.peerKind = Follower
+	rf.votedFor = -1
+	rf.lastUpdated = time.Now()
+
+	rf.mu.Unlock()
+}
+
+//
 // get lastLogIndex and lastLogTerm
 //
 func (rf *Raft) GetLastLogInfo() (index int, term int) {
@@ -171,6 +185,9 @@ func (rf *Raft) GetLastLogInfo() (index int, term int) {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	//if (rf.peerKind == Leader || rf.peerKind == Candidate) && args.CandidateTerm > rf.currentTerm{
+	//	rf.TurnFollower()
+	//}
 	reply.Term = rf.currentTerm
 	rf.lastUpdated = time.Now() // todo important
 	if rf.currentTerm > args.CandidateTerm || rf.HasVotedForOthers(args.CandidateId) {
@@ -178,6 +195,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	if rf.ArgsMoreUpdate(args.LastLogIndex, args.LastLogTerm) {
+		DPrintf("Server %v votes for Candidate %v, state: %v", rf.me, args.CandidateId, rf.peerKind)
 		reply.VoteGranted = true
 		return
 	}
@@ -251,10 +269,7 @@ func (rf *Raft) sendRequestVote(server int) {
 		DPrintf("Candidate %v fail to send RequestVote rpc to server %v\n", rf.me, server)
 	}
 	if reply.Term > term {
-		rf.mu.Lock()
-		rf.peerKind = Follower //todo
-		rf.votedFor = -1
-		rf.mu.Unlock()
+		rf.TurnFollower()
 	}
 	//todo when '='
 	if reply.VoteGranted && rf.peerKind == Candidate && rf.currentTerm == term {
@@ -266,12 +281,15 @@ func (rf *Raft) sendRequestVote(server int) {
 }
 func (rf *Raft) sendAppendEntries(server int) {
 
-	args := AppendEntriesArgs{rf.currentTerm,rf.me,-1,-1,nil,rf.commitIndex}
+	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1, nil, rf.commitIndex}
 	reply := AppendEntriesReply{}
 	if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
-		DPrintf("Leader %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.me, server)
+		DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
+		return
 	}
-
+	if reply.Term > rf.currentTerm {
+		rf.TurnFollower()
+	}
 }
 
 type AppendEntriesArgs struct {
@@ -289,13 +307,22 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	if len(args.Entries) == 0{
-
+	if rf.currentTerm > args.Term {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
 	}
-	rf.mu.Lock()
-	rf.votedFor = -1
-	rf.lastUpdated = time.Now()
-	rf.mu.Unlock()
+	//heartbeat
+	if len(args.Entries) == 0 {
+		rf.mu.Lock()
+		if rf.peerKind == Leader || rf.peerKind == Candidate {
+			rf.peerKind = Follower
+		}
+		rf.votedFor = -1
+		rf.lastUpdated = time.Now()
+		rf.currentTerm = args.Term
+		rf.mu.Unlock()
+	}
 
 }
 
@@ -351,22 +378,24 @@ func (rf *Raft) Act() {
 		switch rf.peerKind {
 		case Follower:
 			if time.Now().Sub(rf.lastUpdated) > ElectionTimeout {
+				DPrintf("Candidate %v started election after %v, term: %v\n", rf.me, ElectionTimeout, rf.currentTerm+1)
 				ElectionTimeout = time.Duration(rand.Int()%ElectionTimeoutBase+ElectionTimeoutBase) * time.Millisecond
-				rf.lastUpdated = time.Now()
 				go rf.StartElection()
 			}
 			time.Sleep(CheckTimeoutDuration)
 		case Candidate:
 			if time.Now().Sub(rf.lastUpdated) > ElectionTimeout {
+				DPrintf("Candidate %v started election after %v, term: %v\n", rf.me, ElectionTimeout, rf.currentTerm+1)
 				ElectionTimeout = time.Duration(rand.Int()%ElectionTimeoutBase+ElectionTimeoutBase) * time.Millisecond
-				rf.lastUpdated = time.Now()
 				go rf.StartElection()
 			}
 			if rf.votesGained >= peersSum-peersSum/2 {
+				DPrintf("Server %v becomes the leader\n", rf.me)
 				rf.mu.Lock()
 				rf.peerKind = Leader
 				rf.votedFor = -1
 				rf.mu.Unlock()
+				continue
 			}
 			time.Sleep(CheckTimeoutDuration) //todo
 		case Leader:
@@ -388,12 +417,13 @@ func (rf *Raft) Act() {
 // Become a candidate and start an election
 //
 func (rf *Raft) StartElection() {
-	DPrintf("Candidate %v started election", rf.me)
+
 	rf.mu.Lock()
 	rf.peerKind = Candidate
 	rf.currentTerm += 1
-	rf.votesGained = 0
+	rf.votesGained = 1
 	rf.votedFor = rf.me
+	rf.lastUpdated = time.Now()
 	rf.mu.Unlock()
 
 	for index := 0; index < len(rf.peers); index++ {

@@ -17,3 +17,4 @@
 /main/mrsequential
 /main/mrworker
 /main/test.go
+/raft/debug.txt
