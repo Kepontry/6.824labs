@@ -189,11 +189,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//	rf.TurnFollower()
 	//}
 	reply.Term = rf.currentTerm
-	rf.lastUpdated = time.Now() // todo important
+	if rf.HasVotedForOthers(args.CandidateId) {
+		DPrintf("Server%v(state: %v) vote for others(id: %v),candidate:%v", rf.me, rf.peerKind, rf.votedFor, args.CandidateId)
+	}
 	if rf.currentTerm > args.CandidateTerm || rf.HasVotedForOthers(args.CandidateId) {
 		reply.VoteGranted = false
 		return
 	}
+	rf.lastUpdated = time.Now() // todo important
 	if rf.ArgsMoreUpdate(args.LastLogIndex, args.LastLogTerm) {
 		DPrintf("Server %v votes for Candidate %v, state: %v", rf.me, args.CandidateId, rf.peerKind)
 		reply.VoteGranted = true
@@ -267,8 +270,10 @@ func (rf *Raft) sendRequestVote(server int) {
 	reply := RequestVoteReply{}
 	if !rf.peers[server].Call("Raft.RequestVote", &args, &reply) {
 		DPrintf("Candidate %v fail to send RequestVote rpc to server %v\n", rf.me, server)
+		return
 	}
 	if reply.Term > term {
+		DPrintf("Candidate %v downgrade when send rv rpc to server %v, currentTerm %v\n", rf.me, reply.Term, term)
 		rf.TurnFollower()
 	}
 	//todo when '='
@@ -288,6 +293,7 @@ func (rf *Raft) sendAppendEntries(server int) {
 		return
 	}
 	if reply.Term > rf.currentTerm {
+		DPrintf("Leader %v downgrade when send rv rpc to server %v, currentTerm %v\n", rf.me, reply.Term, rf.currentTerm)
 		rf.TurnFollower()
 	}
 }
