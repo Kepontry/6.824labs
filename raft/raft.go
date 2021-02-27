@@ -30,8 +30,8 @@ import "lab/labrpc"
 // import "bytes"
 // import "../labgob"
 
-const ElectionTimeoutBase = 150                    // 150ms
-const HeartBeatTimeout = 100 * time.Millisecond    // 100ms
+const ElectionTimeoutBase = 250                    // 250ms
+const HeartBeatTimeout = 150 * time.Millisecond    // 150ms
 const CheckTimeoutDuration = 10 * time.Millisecond // 10ms
 const (
 	Follower  = 1
@@ -185,12 +185,9 @@ func (rf *Raft) GetLastLogInfo() (index int, term int) {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//if (rf.peerKind == Leader || rf.peerKind == Candidate) && args.CandidateTerm > rf.currentTerm{
-	//	rf.TurnFollower()
-	//}
 	reply.Term = rf.currentTerm
 	if rf.HasVotedForOthers(args.CandidateId) {
-		DPrintf("Server%v(state: %v) vote for others(id: %v),candidate:%v", rf.me, rf.peerKind, rf.votedFor, args.CandidateId)
+		DPrintf("Server%v(state: %v) vote for others(id: %v),candidate:%v，term:%v", rf.me, rf.peerKind, rf.votedFor, args.CandidateId,args.CandidateTerm)
 	}
 	if rf.currentTerm > args.CandidateTerm || rf.HasVotedForOthers(args.CandidateId) {
 		reply.VoteGranted = false
@@ -269,11 +266,11 @@ func (rf *Raft) sendRequestVote(server int) {
 	args := RequestVoteArgs{rf.me, term, lastLogIndex, lastLogTerm}
 	reply := RequestVoteReply{}
 	if !rf.peers[server].Call("Raft.RequestVote", &args, &reply) {
-		DPrintf("Candidate %v fail to send RequestVote rpc to server %v\n", rf.me, server)
+		//DPrintf("Candidate %v fail to send RequestVote rpc to server %v, term: %v\n", rf.me, server, term)
 		return
 	}
-	if reply.Term > term {
-		DPrintf("Candidate %v downgrade when send rv rpc to server %v, currentTerm %v\n", rf.me, reply.Term, term)
+	if reply.Term > term && rf.peerKind == Candidate {
+		DPrintf("Candidate %v downgrade when send RV rpc to server %v, currentTerm %v\n", rf.me, server, term)
 		rf.TurnFollower()
 	}
 	//todo when '='
@@ -289,11 +286,11 @@ func (rf *Raft) sendAppendEntries(server int) {
 	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1, nil, rf.commitIndex}
 	reply := AppendEntriesReply{}
 	if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
-		DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
+		//DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
 		return
 	}
-	if reply.Term > rf.currentTerm {
-		DPrintf("Leader %v downgrade when send rv rpc to server %v, currentTerm %v\n", rf.me, reply.Term, rf.currentTerm)
+	if reply.Term > rf.currentTerm && rf.peerKind == Leader {
+		DPrintf("Leader %v downgrade when send AE rpc to server %v, currentTerm %v\n", rf.me, server, rf.currentTerm)
 		rf.TurnFollower()
 	}
 }
@@ -391,9 +388,10 @@ func (rf *Raft) Act() {
 			time.Sleep(CheckTimeoutDuration)
 		case Candidate:
 			if time.Now().Sub(rf.lastUpdated) > ElectionTimeout {
-				DPrintf("Candidate %v started election after %v, term: %v\n", rf.me, ElectionTimeout, rf.currentTerm+1)
+				DPrintf("Candidate %v election timeout after %v, term: %v\n", rf.me, ElectionTimeout, rf.currentTerm)
 				ElectionTimeout = time.Duration(rand.Int()%ElectionTimeoutBase+ElectionTimeoutBase) * time.Millisecond
-				go rf.StartElection()
+				rf.TurnFollower()
+				continue
 			}
 			if rf.votesGained >= peersSum-peersSum/2 {
 				DPrintf("Server %v becomes the leader\n", rf.me)
