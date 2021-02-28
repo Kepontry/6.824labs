@@ -82,6 +82,9 @@ type Raft struct {
 	lastUpdated time.Time
 	leaderId    int //todo waiting for init
 	votesGained int
+	nextIndex   []int
+	matchIndex  []int
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -290,7 +293,8 @@ func (rf *Raft) sendRequestVote(server int) {
 }
 func (rf *Raft) sendHeartbeats(server int) {
 
-	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1, nil, rf.commitIndex}
+	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1,
+		nil, rf.commitIndex}
 	reply := AppendEntriesReply{}
 	if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
 		//DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
@@ -303,15 +307,25 @@ func (rf *Raft) sendHeartbeats(server int) {
 }
 func (rf *Raft) sendAppendEntries(server int) {
 	//todo
-	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1, nil, rf.commitIndex}
-	reply := AppendEntriesReply{}
-	if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
-		//DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
-		return
-	}
-	if reply.Term > rf.currentTerm && rf.peerKind == Leader {
-		DPrintf("Leader %v downgrade when send HB rpc to server %v, currentTerm %v\n", rf.me, server, rf.currentTerm)
-		rf.TurnFollower()
+	nextIndex := rf.nextIndex[server]
+	if len(rf.logs)-1 >= nextIndex {
+		entries := rf.logs[nextIndex : nextIndex+1]
+		args := AppendEntriesArgs{rf.currentTerm, rf.me, nextIndex - 1,
+			rf.logs[nextIndex-1].Term, entries, rf.commitIndex}
+		reply := AppendEntriesReply{}
+		if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
+			//DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
+			return
+		}
+		if reply.Term > rf.currentTerm && rf.peerKind == Leader {
+			DPrintf("Leader %v downgrade when send HB rpc to server %v, currentTerm %v\n", rf.me, server, rf.currentTerm)
+			rf.TurnFollower()
+		}
+		if reply.Success {
+			//todo
+		} else {
+			//todo
+		}
 	}
 }
 
@@ -325,13 +339,14 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term         int
+	Success      bool
+	ConflictTerm int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	reply.Term = rf.currentTerm
 	if rf.currentTerm > args.Term {
-		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
@@ -345,8 +360,32 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.lastUpdated = time.Now()
 		rf.currentTerm = args.Term
 		rf.mu.Unlock()
+		reply.Success = true
+		return
 	}
-
+	lastIndex := args.PrevLogIndex
+	rf.mu.Lock()
+	if lastIndex <= len(rf.logs)-1 {
+		if rf.logs[lastIndex].Term == args.PrevLogTerm {
+			for _, entry := range args.Entries {
+				rf.logs = append(rf.logs, entry)
+			}
+			reply.Success = true
+		} else {
+			//delete conflict log entries
+			reply.ConflictTerm = rf.logs[lastIndex].Term
+			rf.logs = rf.logs[:lastIndex]
+			reply.Success = false
+		}
+	} else {
+		//todo
+		reply.ConflictTerm = args.PrevLogTerm
+		reply.Success = false
+	}
+	if rf.commitIndex < args.LeaderCommit {
+		rf.commitIndex = MinInt(args.LeaderCommit, len(rf.logs)-1) //todo
+	}
+	rf.mu.Unlock()
 }
 
 //
@@ -418,17 +457,33 @@ func (rf *Raft) Act() {
 				continue
 			}
 			if rf.votesGained >= peersSum-peersSum/2 {
+				// win the election
 				DPrintf("Server %v becomes the leader\n", rf.me)
 				rf.mu.Lock()
 				rf.peerKind = Leader
 				rf.votedFor = -1
+				logIndexPlus1 := len(rf.logs)
+				//init rf.nextIndex
+				for i, _ := range rf.nextIndex {
+					rf.nextIndex[i] = logIndexPlus1
+				}
+				for i := len(rf.nextIndex); i < len(rf.peers); i++ {
+					rf.nextIndex = append(rf.nextIndex, logIndexPlus1)
+				}
+				//init rf.matchIndex
+				for i, _ := range rf.matchIndex {
+					rf.matchIndex[i] = 0
+				}
+				for i := len(rf.matchIndex); i < len(rf.peers); i++ {
+					rf.matchIndex = append(rf.matchIndex, 0)
+				}
 				rf.mu.Unlock()
 				go rf.CheckAgreement()
 				continue
 			}
 			time.Sleep(CheckTimeoutDuration) //todo
 		case Leader:
-			for index,_ := range rf.peers {
+			for index, _ := range rf.peers {
 				if index != rf.me {
 					go rf.sendHeartbeats(index)
 				}
@@ -454,7 +509,7 @@ func (rf *Raft) StartElection() {
 	rf.lastUpdated = time.Now()
 	rf.mu.Unlock()
 
-	for index,_ := range rf.peers {
+	for index, _ := range rf.peers {
 		if index != rf.me {
 			// use goroutine to send RPCs separately
 			go rf.sendRequestVote(index)
@@ -466,8 +521,8 @@ func (rf *Raft) StartElection() {
 // Check agreement on logs.
 //
 func (rf *Raft) CheckAgreement() {
-	for rf.peerKind == Leader && !rf.killed(){
-		for index,_ := range rf.peers {
+	for rf.peerKind == Leader && !rf.killed() {
+		for index, _ := range rf.peers {
 			go rf.sendAppendEntries(index)
 		}
 		time.Sleep(CheckAgreementDuration)
