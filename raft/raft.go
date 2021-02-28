@@ -30,9 +30,10 @@ import "lab/labrpc"
 // import "bytes"
 // import "../labgob"
 
-const ElectionTimeoutBase = 250                    // 250ms
-const HeartBeatTimeout = 150 * time.Millisecond    // 150ms
-const CheckTimeoutDuration = 10 * time.Millisecond // 10ms
+const ElectionTimeoutBase = 250                      // 250ms
+const HeartBeatTimeout = 150 * time.Millisecond      // 150ms
+const CheckTimeoutDuration = 10 * time.Millisecond   // 10ms
+const CheckAgreementDuration = 50 * time.Millisecond // 50ms
 const (
 	Follower  = 1
 	Candidate = 2
@@ -57,7 +58,7 @@ type ApplyMsg struct {
 }
 
 type LogEntry struct {
-	Command string // todo
+	Command interface{}
 	Term    int
 }
 
@@ -161,11 +162,9 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) TurnFollower() {
 	rf.mu.Lock()
-
 	rf.peerKind = Follower
 	rf.votedFor = -1
 	rf.lastUpdated = time.Now()
-
 	rf.mu.Unlock()
 }
 
@@ -186,22 +185,30 @@ func (rf *Raft) GetLastLogInfo() (index int, term int) {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	reply.Term = rf.currentTerm
-	if rf.HasVotedForOthers(args.CandidateId) {
-		DPrintf("Server%v(state: %v) vote for others(id: %v),candidate:%v，term:%v", rf.me, rf.peerKind, rf.votedFor, args.CandidateId,args.CandidateTerm)
-	}
+	//if rf.HasVotedForOthers(args.CandidateId) {
+	//	DPrintf("Server%v(state: %v) vote for others(id: %v),candidate:%v，term:%v", rf.me, rf.peerKind, rf.votedFor, args.CandidateId, args.CandidateTerm)
+	//}
 	if rf.currentTerm > args.CandidateTerm || rf.HasVotedForOthers(args.CandidateId) {
 		reply.VoteGranted = false
 		return
 	}
-	rf.lastUpdated = time.Now() // todo important
-	if rf.ArgsMoreUpdate(args.LastLogIndex, args.LastLogTerm) {
+	if rf.currentTerm < args.CandidateTerm {
+		rf.mu.Lock()
+		rf.lastUpdated = time.Now()
+		rf.peerKind = Follower
+		rf.currentTerm = args.CandidateTerm
+		rf.mu.Unlock()
+	}
+	if rf.ArgsMoreUpdate(args.LastLogIndex, args.LastLogTerm) && rf.peerKind == Follower {
 		DPrintf("Server %v votes for Candidate %v, state: %v", rf.me, args.CandidateId, rf.peerKind)
 		reply.VoteGranted = true
+		rf.mu.Lock()
+		rf.votedFor = args.CandidateId
+		rf.mu.Unlock()
 		return
 	}
 	reply.VoteGranted = false
 	return
-	// todo
 }
 
 func (rf *Raft) HasVotedForOthers(id int) bool {
@@ -272,8 +279,8 @@ func (rf *Raft) sendRequestVote(server int) {
 	if reply.Term > term && rf.peerKind == Candidate {
 		DPrintf("Candidate %v downgrade when send RV rpc to server %v, currentTerm %v\n", rf.me, server, term)
 		rf.TurnFollower()
+		return
 	}
-	//todo when '='
 	if reply.VoteGranted && rf.peerKind == Candidate && rf.currentTerm == term {
 		rf.mu.Lock()
 		rf.votesGained += 1
@@ -281,7 +288,7 @@ func (rf *Raft) sendRequestVote(server int) {
 	}
 
 }
-func (rf *Raft) sendAppendEntries(server int) {
+func (rf *Raft) sendHeartbeats(server int) {
 
 	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1, nil, rf.commitIndex}
 	reply := AppendEntriesReply{}
@@ -290,7 +297,20 @@ func (rf *Raft) sendAppendEntries(server int) {
 		return
 	}
 	if reply.Term > rf.currentTerm && rf.peerKind == Leader {
-		DPrintf("Leader %v downgrade when send AE rpc to server %v, currentTerm %v\n", rf.me, server, rf.currentTerm)
+		DPrintf("Leader %v downgrade when send HB rpc to server %v, currentTerm %v\n", rf.me, server, rf.currentTerm)
+		rf.TurnFollower()
+	}
+}
+func (rf *Raft) sendAppendEntries(server int) {
+	//todo
+	args := AppendEntriesArgs{rf.currentTerm, rf.me, -1, -1, nil, rf.commitIndex}
+	reply := AppendEntriesReply{}
+	if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
+		//DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
+		return
+	}
+	if reply.Term > rf.currentTerm && rf.peerKind == Leader {
+		DPrintf("Leader %v downgrade when send HB rpc to server %v, currentTerm %v\n", rf.me, server, rf.currentTerm)
 		rf.TurnFollower()
 	}
 }
@@ -344,13 +364,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
 
 	// Your code here (2B).
+	if rf.peerKind == Leader {
+		rf.mu.Lock()
+		rf.logs = append(rf.logs, LogEntry{command, rf.currentTerm})
+		index := len(rf.logs) - 1
+		rf.mu.Unlock()
+		return index, rf.currentTerm, true
+	}
 
-	return index, term, isLeader
+	return -1, -1, false
 }
 
 //
@@ -399,14 +423,14 @@ func (rf *Raft) Act() {
 				rf.peerKind = Leader
 				rf.votedFor = -1
 				rf.mu.Unlock()
+				go rf.CheckAgreement()
 				continue
 			}
 			time.Sleep(CheckTimeoutDuration) //todo
 		case Leader:
-			for index := 0; index < len(rf.peers); index++ {
+			for index,_ := range rf.peers {
 				if index != rf.me {
-					go rf.sendAppendEntries(index)
-
+					go rf.sendHeartbeats(index)
 				}
 			}
 			time.Sleep(HeartBeatTimeout)
@@ -430,11 +454,23 @@ func (rf *Raft) StartElection() {
 	rf.lastUpdated = time.Now()
 	rf.mu.Unlock()
 
-	for index := 0; index < len(rf.peers); index++ {
+	for index,_ := range rf.peers {
 		if index != rf.me {
 			// use goroutine to send RPCs separately
 			go rf.sendRequestVote(index)
 		}
+	}
+}
+
+//
+// Check agreement on logs.
+//
+func (rf *Raft) CheckAgreement() {
+	for rf.peerKind == Leader && !rf.killed(){
+		for index,_ := range rf.peers {
+			go rf.sendAppendEntries(index)
+		}
+		time.Sleep(CheckAgreementDuration)
 	}
 }
 
