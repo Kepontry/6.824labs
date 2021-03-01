@@ -20,6 +20,7 @@ package raft
 import (
 	"log"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 )
@@ -84,7 +85,7 @@ type Raft struct {
 	votesGained int
 	nextIndex   []int
 	matchIndex  []int
-
+	applyCh     chan ApplyMsg
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -308,10 +309,18 @@ func (rf *Raft) sendHeartbeats(server int) {
 func (rf *Raft) sendAppendEntries(server int) {
 	//todo
 	nextIndex := rf.nextIndex[server]
+	endIndex := nextIndex
 	if len(rf.logs)-1 >= nextIndex {
-		entries := rf.logs[nextIndex : nextIndex+1]
-		args := AppendEntriesArgs{rf.currentTerm, rf.me, nextIndex - 1,
-			rf.logs[nextIndex-1].Term, entries, rf.commitIndex}
+		entries := rf.logs[nextIndex : endIndex+1]
+		prevLogIndex := nextIndex - 1
+		var prevLogTerm int
+		if prevLogIndex == -1 {
+			prevLogTerm = 0
+		} else {
+			prevLogTerm = rf.logs[nextIndex-1].Term
+		}
+		args := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIndex,
+			prevLogTerm, entries, rf.commitIndex}
 		reply := AppendEntriesReply{}
 		if !rf.peers[server].Call("Raft.AppendEntries", &args, &reply) {
 			//DPrintf("Leader(state: %v) %v fail to send AppendEntries(heartbeat) rpc to server %v\n", rf.peerKind, rf.me, server)
@@ -322,9 +331,23 @@ func (rf *Raft) sendAppendEntries(server int) {
 			rf.TurnFollower()
 		}
 		if reply.Success {
-			//todo
+			DPrintf("Leader %v send AE to server %v, success", rf.me, server)
+			rf.mu.Lock()
+			// What about rpc lost
+			rf.nextIndex[server] = endIndex + 1
+			rf.matchIndex[server] = endIndex
+			rf.mu.Unlock()
 		} else {
-			//todo
+			DPrintf("Leader %v send AE to server %v, failed", rf.me, server)
+			confictTerm := reply.ConflictTerm
+			for i, entry := range rf.logs {
+				if entry.Term == confictTerm && i-1 >= 0 {
+					rf.mu.Lock()
+					rf.nextIndex[server] = i
+					rf.mu.Unlock()
+				}
+			}
+
 		}
 	}
 }
@@ -359,15 +382,24 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.votedFor = -1
 		rf.lastUpdated = time.Now()
 		rf.currentTerm = args.Term
-		rf.mu.Unlock()
+
 		reply.Success = true
+
+		for rf.lastApplied < rf.commitIndex {
+			DPrintf("message send")
+			rf.lastApplied += 1
+			message := ApplyMsg{true,rf.logs[rf.lastApplied].Command,rf.lastApplied}
+			rf.applyCh <- message
+		}
+		rf.mu.Unlock()
 		return
 	}
 	lastIndex := args.PrevLogIndex
 	rf.mu.Lock()
 	if lastIndex <= len(rf.logs)-1 {
-		if rf.logs[lastIndex].Term == args.PrevLogTerm {
+		if lastIndex == -1 || rf.logs[lastIndex].Term == args.PrevLogTerm { //todo
 			for _, entry := range args.Entries {
+				DPrintf("Append command %v to logs of server %v", entry.Command, rf.me)
 				rf.logs = append(rf.logs, entry)
 			}
 			reply.Success = true
@@ -406,13 +438,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	if rf.peerKind == Leader {
+		DPrintf("Add command %v to leader logs", command)
 		rf.mu.Lock()
 		rf.logs = append(rf.logs, LogEntry{command, rf.currentTerm})
 		index := len(rf.logs) - 1
 		rf.mu.Unlock()
 		return index, rf.currentTerm, true
 	}
-
+	DPrintf("Not leader when add command %v to logs", command)
 	return -1, -1, false
 }
 
@@ -472,10 +505,10 @@ func (rf *Raft) Act() {
 				}
 				//init rf.matchIndex
 				for i, _ := range rf.matchIndex {
-					rf.matchIndex[i] = 0
+					rf.matchIndex[i] = -1
 				}
 				for i := len(rf.matchIndex); i < len(rf.peers); i++ {
-					rf.matchIndex = append(rf.matchIndex, 0)
+					rf.matchIndex = append(rf.matchIndex, -1)
 				}
 				rf.mu.Unlock()
 				go rf.CheckAgreement()
@@ -523,8 +556,18 @@ func (rf *Raft) StartElection() {
 func (rf *Raft) CheckAgreement() {
 	for rf.peerKind == Leader && !rf.killed() {
 		for index, _ := range rf.peers {
-			go rf.sendAppendEntries(index)
+			if index != rf.me {
+				go rf.sendAppendEntries(index)
+			}
 		}
+		rf.mu.Lock()
+		matchIndexs := rf.matchIndex
+		sort.Ints(matchIndexs)
+		majorityIndex := matchIndexs[len(matchIndexs)/2]
+		if majorityIndex > rf.commitIndex && rf.logs[majorityIndex].Term == rf.currentTerm {
+			rf.commitIndex = majorityIndex
+		}
+		rf.mu.Unlock()
 		time.Sleep(CheckAgreementDuration)
 	}
 }
@@ -552,12 +595,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	//rf.logs
-	rf.commitIndex = 0
-	rf.lastApplied = 0
+	rf.commitIndex = -1
+	rf.lastApplied = -1
 
 	rf.peerKind = Follower
 	rf.lastUpdated = time.Now()
 	rf.votesGained = 0
+	rf.applyCh = applyCh
 
 	go rf.Act()
 	// initialize from state persisted before a crash
