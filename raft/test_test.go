@@ -175,7 +175,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// re-connect
 	cfg.connect((leader + 1) % servers)
-
+	DPrintf("\nreconnected\n")
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
@@ -218,8 +218,11 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// repair
 	cfg.connect((leader + 1) % servers)
+	DPrintf("server1 connected")
 	cfg.connect((leader + 2) % servers)
+	DPrintf("server2 connected")
 	cfg.connect((leader + 3) % servers)
+	DPrintf("server3 connected")
 
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
@@ -231,9 +234,9 @@ func TestFailNoAgree2B(t *testing.T) {
 	if index2 < 2 || index2 > 3 {
 		t.Fatalf("unexpected index %v", index2)
 	}
-
+	DPrintf("command 1 success,index: %v",index2)
 	cfg.one(1000, servers, true)
-
+	DPrintf("command 2 success")
 	cfg.end()
 }
 

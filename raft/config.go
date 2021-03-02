@@ -371,11 +371,11 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
-		//DPrintf("len of logs: %v",len(cfg.logs[i]))
+
 		cfg.mu.Unlock()
 
 		if ok {
-			DPrintf("Ok")
+
 			if count > 0 && cmd != cmd1 {
 				cfg.t.Fatalf("committed values do not match: index %v, %v, %v\n",
 					index, cmd, cmd1)
