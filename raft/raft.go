@@ -31,10 +31,9 @@ import "lab/labrpc"
 // import "bytes"
 // import "../labgob"
 
-const ElectionTimeoutBase = 250                      // 250ms
-const HeartBeatTimeout = 150 * time.Millisecond      // 150ms
+const ElectionTimeoutBase = 150                      // 200ms
+const HeartBeatTimeout = 100 * time.Millisecond      // 150ms
 const CheckTimeoutDuration = 10 * time.Millisecond   // 10ms
-const CheckAgreementDuration = 50 * time.Millisecond // 50ms
 const CheckAppliedDuration = 50 * time.Millisecond   // 50ms
 
 const (
@@ -192,17 +191,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//if rf.HasVotedForOthers(args.CandidateId) {
 	//	DPrintf("Server%v(state: %v) vote for others(id: %v),candidate:%v，term:%v", rf.me, rf.peerKind, rf.votedFor, args.CandidateId, args.CandidateTerm)
 	//}
+	if rf.currentTerm < args.CandidateTerm {
+		rf.mu.Lock()
+		rf.lastUpdated = time.Now()
+		rf.currentTerm = args.CandidateTerm
+		if rf.peerKind == Leader || rf.peerKind == Candidate {
+			rf.peerKind = Follower
+			rf.votedFor = -1
+		}
+		rf.mu.Unlock()
+	}
 	if rf.currentTerm > args.CandidateTerm || rf.HasVotedForOthers(args.CandidateId) {
 		reply.VoteGranted = false
 		return
 	}
-	if rf.currentTerm < args.CandidateTerm {
-		rf.mu.Lock()
-		rf.lastUpdated = time.Now()
-		rf.peerKind = Follower
-		rf.currentTerm = args.CandidateTerm
-		rf.mu.Unlock()
-	}
+
 	if rf.ArgsMoreUpdate(args.LastLogIndex, args.LastLogTerm) && rf.peerKind == Follower {
 		DPrintf("Server %v votes for Candidate %v, state: %v", rf.me, args.CandidateId, rf.peerKind)
 		reply.VoteGranted = true
@@ -300,6 +303,10 @@ func (rf *Raft) sendAppendEntries(server int) {
 	HeartBeatFlag := true
 	nextIndex := rf.nextIndex[server]
 	endIndex := nextIndex
+	remainEntries := len(rf.logs) - nextIndex + 1
+	if remainEntries > 8 {
+		endIndex = nextIndex - 1 + remainEntries/4
+	}
 	prevLogIndex := nextIndex - 1
 	var prevLogTerm int
 	if prevLogIndex == 0 {
