@@ -384,7 +384,9 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cmd = cmd1
 		}
 	}
-	DPrintf("Agree sum: %v",count)
+	if count != 0 {
+		DPrintf("Agree sum: %v", count)
+	}
 	return count, cmd
 }
 
