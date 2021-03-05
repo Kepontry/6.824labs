@@ -23,6 +23,7 @@ import (
 	"log"
 	"math/rand"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -338,36 +339,45 @@ func (rf *Raft) sendAppendEntries(server int) {
 	}
 	if reply.Success {
 		if !HeartBeatFlag {
-			DPrintf("Leader %v send AE to server %v, success, length: %v, leaderCommit: %v", rf.me, server, len(rf.logs), rf.commitIndex)
+			DPrintf("Leader %v send AE%v to server %v, success, length: %v, leaderCommit: %v, nextIndex:%v", rf.me, len(args.Entries), server, len(rf.logs), rf.commitIndex, rf.nextIndex[server])
 			rf.mu.Lock()
 			// What about rpc lost
-			rf.nextIndex[server] = endIndex + 1
-			rf.matchIndex[server] = endIndex
+			//DPrintf("nextIndex:%v,matchIndex:%v,endIndex:%v", rf.nextIndex[server], rf.matchIndex[server], endIndex)
+			if rf.nextIndex[server] < endIndex+1 && rf.matchIndex[server] < endIndex {
+				rf.nextIndex[server] = endIndex + 1
+				rf.matchIndex[server] = endIndex
+			}
 			rf.mu.Unlock()
 		}
 	} else {
-		DPrintf("Leader %v send AE to server %v, failed, nextIndex: %v", rf.me, server, rf.nextIndex[server])
+		DPrintf("Leader %v send AE to server %v, failed, length: %v, leaderCommit: %v, nextIndex: %v,matchIndex:%v", rf.me, server, len(rf.logs), rf.commitIndex, rf.nextIndex[server], rf.matchIndex[server])
 		conflictTerm := reply.ConflictTerm
-		if conflictTerm == -2 {
-			return // repeat entries
-		}
+		//if conflictTerm == -2 {
+		//	return // repeat entries
+		//}
 		for i, entry := range rf.logs {
 			if entry.Term == conflictTerm {
 				rf.mu.Lock()
 				if i >= 1 {
 					rf.nextIndex[server] = i // i - 1 + 1
-					if rf.matchIndex[server] > i {
-						rf.matchIndex[server] = i
-					}
+					//if rf.matchIndex[server] > i {
+					//	rf.matchIndex[server] = i
+					//}
+					DPrintf("Set server %v nextIndex %v", server, i)
 				} else {
 					rf.nextIndex[server] = 1 //todo
-					rf.matchIndex[server] = 1
+					//rf.matchIndex[server] = 0
+					DPrintf("Set server %v nextIndex %v", server, i)
 				}
 				rf.mu.Unlock()
 				break
 			}
+			if (i == len(rf.logs)-1) && rf.nextIndex[server] != 1{
+				rf.mu.Lock()
+				rf.nextIndex[server] -= 1
+				rf.mu.Unlock()
+			}
 		}
-
 	}
 
 	var matchIndexs []int
@@ -384,6 +394,9 @@ func (rf *Raft) sendAppendEntries(server int) {
 		rf.commitIndex = majorityIndex
 		rf.mu.Unlock()
 	}
+	//else if majorityIndex > 0 {
+	//	DPrintf("majorTerm:%v,currentTerm:%v", rf.logs[majorityIndex-1].Term, rf.currentTerm)
+	//}
 
 }
 
@@ -405,6 +418,9 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer func() {
+		if !reply.Success {
+			rf.PrintLogs()
+		}
 		rf.persist()
 		rf.mu.Unlock()
 	}()
@@ -427,18 +443,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				//DPrintf("Append command %v to logs of server %v", entry.Command, rf.me)
 				if lastIndex+i+1 <= len(rf.logs) {
 					entry2 := rf.logs[lastIndex+i]
-					if entry2.Term==entry.Term&&entry2.Command==entry.Command{
+					if entry2.Term == entry.Term && entry2.Command == entry.Command {
 						repeatTimes += 1
 						continue
 					}
-					rf.logs = rf.logs[:lastIndex+i]// todo important
+					rf.logs = rf.logs[:lastIndex+i] // todo important
 				}
 				rf.logs = append(rf.logs, entry)
 			}
 			reply.Success = true
+
 			if repeatTimes == len(args.Entries) && repeatTimes != 0 {
-				reply.Success = false
-				reply.ConflictTerm = -2 //repeat entries
+				reply.Success = true
+				return
+				//reply.ConflictTerm = -2 //repeat entries
+				//DPrintf("repeat,times:%v,length:%v", repeatTimes, len(args.Entries))
 			}
 		} else {
 			reply.ConflictTerm = rf.logs[lastIndex-1].Term
@@ -474,7 +493,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	if rf.peerKind == Leader {
-		//DPrintf("Add command %v to leader logs", command)
+		DPrintf("Add command %v to leader logs,logLength:%v", command, len(rf.logs))
 		rf.mu.Lock()
 		rf.logs = append(rf.logs, LogEntry{command, rf.currentTerm})
 		index := len(rf.logs)
@@ -644,4 +663,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.CheckApplied()
 
 	return rf
+}
+func (rf *Raft) PrintLogs() {
+	log.Printf("server:" + strconv.Itoa(rf.me) + " ")
+	for _, logEntry := range rf.logs {
+		log.Printf(strconv.Itoa(logEntry.Term) + " ")
+	}
+	log.Printf("\n")
 }

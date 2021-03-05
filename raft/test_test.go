@@ -8,7 +8,10 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
+import (
+	"log"
+	"testing"
+)
 import "fmt"
 import "time"
 import "math/rand"
@@ -718,9 +721,11 @@ func TestFigure82C(t *testing.T) {
 
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
+			//DPrintf("Turn: %v, serverSum: %v,sleepTime:%v", iters, nup, ms)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		} else {
 			ms := (rand.Int63() % 13)
+			//DPrintf("Turn: %v, serverSum: %v,sleepTime:%v", iters, nup, ms)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 
@@ -746,8 +751,13 @@ func TestFigure82C(t *testing.T) {
 		}
 	}
 
-	cfg.one(rand.Int(), servers, true)
 
+	log.Printf("**********\n**********\n*********\n************\n**********\n************\n***********\n")
+
+	leader := cfg.checkOneLeader()
+	cfg.rafts[leader].PrintLogs()
+
+	cfg.one(rand.Int(), servers, true)
 	cfg.end()
 }
 
