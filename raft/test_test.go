@@ -9,7 +9,6 @@ package raft
 //
 
 import (
-	"log"
 	"testing"
 )
 import "fmt"
@@ -751,12 +750,6 @@ func TestFigure82C(t *testing.T) {
 		}
 	}
 
-
-	log.Printf("**********\n**********\n*********\n************\n**********\n************\n***********\n")
-
-	leader := cfg.checkOneLeader()
-	cfg.rafts[leader].PrintLogs()
-
 	cfg.one(rand.Int(), servers, true)
 	cfg.end()
 }
@@ -801,6 +794,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
+		DPrintf("iters:%v",iters)
 		if iters == 200 {
 			cfg.setlongreordering(true)
 		}

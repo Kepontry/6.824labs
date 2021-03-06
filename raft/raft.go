@@ -23,7 +23,6 @@ import (
 	"log"
 	"math/rand"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -34,7 +33,7 @@ import "lab/labrpc"
 // import "bytes"
 // import "../labgob"
 
-const ElectionTimeoutBase = 150                    // 150ms
+const ElectionTimeoutBase = 200                    // 150ms
 const HeartBeatTimeout = 100 * time.Millisecond    // 100ms
 const CheckTimeoutDuration = 10 * time.Millisecond // 10ms
 const CheckAppliedDuration = 50 * time.Millisecond // 50ms
@@ -306,11 +305,12 @@ func (rf *Raft) sendAppendEntries(server int) {
 	//todo
 	HeartBeatFlag := true
 	nextIndex := rf.nextIndex[server]
-	endIndex := nextIndex
-	remainEntries := len(rf.logs) - nextIndex + 1
-	if remainEntries > 8 {
-		endIndex = nextIndex - 1 + remainEntries/4
-	}
+	endIndex := len(rf.logs)
+	//endIndex := nextIndex
+	//remainEntries := len(rf.logs) - nextIndex + 1
+	//if remainEntries > 8 {
+	//	endIndex = nextIndex - 1 + remainEntries/4
+	//}
 	prevLogIndex := nextIndex - 1
 	var prevLogTerm int
 	if prevLogIndex == 0 {
@@ -360,14 +360,10 @@ func (rf *Raft) sendAppendEntries(server int) {
 				rf.mu.Lock()
 				if i >= 1 {
 					rf.nextIndex[server] = i // i - 1 + 1
-					//if rf.matchIndex[server] > i {
-					//	rf.matchIndex[server] = i
-					//}
-					DPrintf("Set server %v nextIndex %v", server, i)
+					//DPrintf("Set server %v nextIndex %v", server, i)
 				} else {
 					rf.nextIndex[server] = 1 //todo
-					//rf.matchIndex[server] = 0
-					DPrintf("Set server %v nextIndex %v", server, i)
+					//DPrintf("Set server %v nextIndex %v", server, i)
 				}
 				rf.mu.Unlock()
 				break
@@ -613,14 +609,14 @@ func (rf *Raft) StartElection() {
 //
 func (rf *Raft) CheckApplied() {
 	for !rf.killed() {
+		rf.mu.Lock()
 		for rf.lastApplied < rf.commitIndex {
 			DPrintf("message send,lastApplied： %v,commitIndex: %v", rf.lastApplied, rf.commitIndex)
-			rf.mu.Lock()
 			rf.lastApplied += 1
 			message := ApplyMsg{true, rf.logs[rf.lastApplied-1].Command, rf.lastApplied}
 			rf.applyCh <- message
-			rf.mu.Unlock()
 		}
+		rf.mu.Unlock()
 		time.Sleep(CheckAppliedDuration)
 	}
 }
@@ -665,9 +661,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 func (rf *Raft) PrintLogs() {
-	log.Printf("server:" + strconv.Itoa(rf.me) + " ")
-	for _, logEntry := range rf.logs {
-		log.Printf(strconv.Itoa(logEntry.Term) + " ")
-	}
-	log.Printf("\n")
+	//log.Printf("server:" + strconv.Itoa(rf.me) + " ")
+	//for _, logEntry := range rf.logs {
+	//	log.Printf(strconv.Itoa(logEntry.Term) + " ")
+	//}
+	//log.Printf("\n")
 }
