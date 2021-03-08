@@ -60,38 +60,38 @@ func TestReElection2A(t *testing.T) {
 	cfg.begin("Test (2A): election after network failure")
 
 	leader1 := cfg.checkOneLeader()
-	fmt.Printf("\n get 1 leader,expect 1\n")
+	DPrintf("get 1 leader,expect 1")
 	// if the leader disconnects, a new one should be elected.
 	cfg.disconnect(leader1)
-	fmt.Printf("\n leader disconnected\n")
+	DPrintf("leader disconnected")
 	cfg.checkOneLeader()
-	fmt.Printf("\n get 1 leader,expect 1\n")
+	DPrintf("get 1 leader,expect 1")
 	// if the old leader rejoins, that shouldn't
 	// disturb the new leader.
 	cfg.connect(leader1)
-	fmt.Printf("\n leader connected\n")
+	DPrintf("leader connected")
 	leader2 := cfg.checkOneLeader()
-	fmt.Printf("\n get 1 leader,expect 1\n")
+	DPrintf("get 1 leader,expect 1")
 	// if there's no quorum, no leader should
 	// be elected.
 	cfg.disconnect(leader2)
-	fmt.Printf("\n leader disconnected\n")
+	DPrintf("leader disconnected")
 	cfg.disconnect((leader2 + 1) % servers)
-	fmt.Printf("\n another server disconnected\n")
+	DPrintf("another server disconnected")
 	time.Sleep(2 * RaftElectionTimeout)
 	cfg.checkNoLeader()
-	fmt.Printf("\n get 0 leader,expect 0\n")
+	DPrintf("get 0 leader,expect 0")
 	// if a quorum arises, it should elect a leader.
 	cfg.connect((leader2 + 1) % servers)
-	fmt.Printf("\n the server connected\n")
+	DPrintf("the server connected")
 	cfg.checkOneLeader()
-	fmt.Printf("\n get 1 leader,expect 1\n")
+	DPrintf("get 1 leader,expect 1")
 
 	// re-join of last node shouldn't prevent leader from existing.
 	cfg.connect(leader2)
-	fmt.Printf("\n leader connected\n")
+	DPrintf("leader connected")
 	cfg.checkOneLeader()
-	fmt.Printf("\n get 1 leader,expect 1\n")
+	DPrintf("get 1 leader,expect 1")
 	time.Sleep(2 * time.Second)
 	cfg.end()
 }
@@ -177,7 +177,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// re-connect
 	cfg.connect((leader + 1) % servers)
-	DPrintf("\nreconnected\n")
+	DPrintf("reconnected")
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
 	// on new commands.
@@ -627,29 +627,30 @@ func TestPersist22C(t *testing.T) {
 
 		cfg.disconnect((leader1 + 1) % servers)
 		cfg.disconnect((leader1 + 2) % servers)
-
+		DPrintf("server %v,%v disconnected",leader1 + 1,leader1 + 2)
 		cfg.one(10+index, servers-2, true)
 		index++
 
 		cfg.disconnect((leader1 + 0) % servers)
 		cfg.disconnect((leader1 + 3) % servers)
 		cfg.disconnect((leader1 + 4) % servers)
-
+		DPrintf("server %v,%v,%v disconnected",leader1 + 0,leader1 + 3,leader1 + 4)
 		cfg.start1((leader1 + 1) % servers)
 		cfg.start1((leader1 + 2) % servers)
 		cfg.connect((leader1 + 1) % servers)
 		cfg.connect((leader1 + 2) % servers)
-
+		DPrintf("server %v,%v restarted",leader1 + 1,leader1 + 2)
 		time.Sleep(RaftElectionTimeout)
 
 		cfg.start1((leader1 + 3) % servers)
 		cfg.connect((leader1 + 3) % servers)
-
+		DPrintf("server %v restarted",leader1 + 3)
 		cfg.one(10+index, servers-2, true)
 		index++
 
 		cfg.connect((leader1 + 4) % servers)
 		cfg.connect((leader1 + 0) % servers)
+		DPrintf("server %v,%v reconnected",leader1 + 4,leader1 + 0)
 	}
 
 	cfg.one(1000, servers, true)
@@ -708,6 +709,7 @@ func TestFigure82C(t *testing.T) {
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
+		DPrintf("iters:%v",iters)
 		leader := -1
 		for i := 0; i < servers; i++ {
 			if cfg.rafts[i] != nil {
@@ -816,6 +818,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 		if leader != -1 && (rand.Int()%1000) < int(RaftElectionTimeout/time.Millisecond)/2 {
 			cfg.disconnect(leader)
+			DPrintf("leader %v disconnected",leader)
 			nup -= 1
 		}
 
@@ -823,6 +826,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			s := rand.Int() % servers
 			if cfg.connected[s] == false {
 				cfg.connect(s)
+				DPrintf("leader %v connected",s)
 				nup += 1
 			}
 		}
