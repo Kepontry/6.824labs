@@ -1,10 +1,13 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
+	//"../labgob"
+	"lab/labgob"
+	//"../labrpc"
+	"lab/labrpc"
 	"log"
-	"../raft"
+	//"../raft"
+	"lab/raft"
 	"sync"
 	"sync/atomic"
 )

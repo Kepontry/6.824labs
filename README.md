@@ -5,6 +5,6 @@ My solutions to labs in the course MIT 6.824 Distributed Systems Spring 2020(sti
 
 ## Progress
 - lab1 completed
-- lab2 work in progress(finished 2A, 2B)
-- lab3 
+- lab2 completed
+- lab3  work in progress
 - lab4 

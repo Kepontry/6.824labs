@@ -18,3 +18,8 @@
 /main/mrworker
 /main/test.go
 /raft/debug*.txt
+/kvraft/debug*.txt
+*.log
+*.err
+/raft/tester
+/raft/go-test-many.sh

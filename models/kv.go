@@ -1,6 +1,7 @@
 package models
 
-import "../porcupine"
+//import "../porcupine"
+import "lab/porcupine"
 import "fmt"
 import "sort"
 
